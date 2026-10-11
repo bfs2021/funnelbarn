@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -19,9 +20,14 @@ type Funnel struct {
 	ProjectID   string       `json:"project_id"`
 	Name        string       `json:"name"`
 	Description string       `json:"description"`
-	Scope       string       `json:"scope"` // "session" (default) or "page_view"
+	Scope       string       `json:"scope"` // "session" (default), "page_view" or "user"
 	Steps       []FunnelStep `json:"steps"`
 	CreatedAt   time.Time    `json:"created_at"`
+
+	// ConversionWindowSeconds bounds a "user" funnel: every later step must
+	// happen within this many seconds of step 1. Nil means
+	// DefaultConversionWindow. The other scopes ignore it.
+	ConversionWindowSeconds *int64 `json:"conversion_window_seconds,omitempty"`
 
 	// UnmatchedSteps lists the step event names this project has never emitted.
 	// A funnel whose steps reference names the project does not send can never
@@ -71,8 +77,8 @@ func (s *Store) CreateFunnel(ctx context.Context, f Funnel) (Funnel, error) {
 	if f.Scope == "" {
 		f.Scope = "session"
 	}
-	const qf = `INSERT INTO funnels (id, project_id, name, description, scope) VALUES (?, ?, ?, ?, ?)`
-	if _, err := tx.ExecContext(ctx, qf, f.ID, f.ProjectID, f.Name, nullStr(f.Description), f.Scope); err != nil {
+	const qf = `INSERT INTO funnels (id, project_id, name, description, scope, conversion_window_seconds) VALUES (?, ?, ?, ?, ?, ?)`
+	if _, err := tx.ExecContext(ctx, qf, f.ID, f.ProjectID, f.Name, nullStr(f.Description), f.Scope, nullInt64(f.ConversionWindowSeconds)); err != nil {
 		return Funnel{}, fmt.Errorf("insert funnel: %w", err)
 	}
 
@@ -111,11 +117,13 @@ func (s *ReadStore) FunnelByID(ctx context.Context, id string) (Funnel, error) {
 
 // funnelByID reads a funnel through db, so write paths can read back on the write pool.
 func (s *ReadStore) funnelByID(ctx context.Context, db querier, id string) (Funnel, error) {
-	const qf = `SELECT id, project_id, name, COALESCE(description,''), COALESCE(scope,'session'), created_at FROM funnels WHERE id = ?`
+	const qf = `SELECT id, project_id, name, COALESCE(description,''), COALESCE(scope,'session'), created_at, conversion_window_seconds FROM funnels WHERE id = ?`
 	var f Funnel
-	if err := db.QueryRowContext(ctx, qf, id).Scan(&f.ID, &f.ProjectID, &f.Name, &f.Description, &f.Scope, &f.CreatedAt); err != nil {
+	var window sql.NullInt64
+	if err := db.QueryRowContext(ctx, qf, id).Scan(&f.ID, &f.ProjectID, &f.Name, &f.Description, &f.Scope, &f.CreatedAt, &window); err != nil {
 		return Funnel{}, err
 	}
+	f.ConversionWindowSeconds = int64Ptr(window)
 
 	steps, err := s.funnelSteps(ctx, db, id)
 	if err != nil {
@@ -132,7 +140,7 @@ func (s *ReadStore) funnelByID(ctx context.Context, db querier, id string) (Funn
 
 // ListFunnels returns all funnels for a project.
 func (s *ReadStore) ListFunnels(ctx context.Context, projectID string) ([]Funnel, error) {
-	const q = `SELECT id, project_id, name, COALESCE(description,''), COALESCE(scope,'session'), created_at FROM funnels WHERE project_id = ? ORDER BY created_at`
+	const q = `SELECT id, project_id, name, COALESCE(description,''), COALESCE(scope,'session'), created_at, conversion_window_seconds FROM funnels WHERE project_id = ? ORDER BY created_at`
 	rows, err := s.rdb.QueryContext(ctx, q, projectID)
 	if err != nil {
 		return nil, err
@@ -142,9 +150,11 @@ func (s *ReadStore) ListFunnels(ctx context.Context, projectID string) ([]Funnel
 	var funnels []Funnel
 	for rows.Next() {
 		var f Funnel
-		if err := rows.Scan(&f.ID, &f.ProjectID, &f.Name, &f.Description, &f.Scope, &f.CreatedAt); err != nil {
+		var window sql.NullInt64
+		if err := rows.Scan(&f.ID, &f.ProjectID, &f.Name, &f.Description, &f.Scope, &f.CreatedAt, &window); err != nil {
 			return nil, err
 		}
+		f.ConversionWindowSeconds = int64Ptr(window)
 		funnels = append(funnels, f)
 	}
 	if err := rows.Err(); err != nil {
@@ -177,7 +187,7 @@ func (s *Store) UpdateFunnel(ctx context.Context, f Funnel) (Funnel, error) {
 	if f.Scope == "" {
 		f.Scope = "session"
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE funnels SET name=?, description=?, scope=? WHERE id=?`, f.Name, nullStr(f.Description), f.Scope, f.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE funnels SET name=?, description=?, scope=?, conversion_window_seconds=? WHERE id=?`, f.Name, nullStr(f.Description), f.Scope, nullInt64(f.ConversionWindowSeconds), f.ID); err != nil {
 		return Funnel{}, fmt.Errorf("update funnel: %w", err)
 	}
 
@@ -240,57 +250,6 @@ func (s *ReadStore) funnelSteps(ctx context.Context, db querier, funnelID string
 	return steps, rows.Err()
 }
 
-// SegmentFilter filters funnel analysis by a field condition on the events (or joined sessions) table.
-type SegmentFilter struct {
-	// Field is the column to filter on: "device_type", "user_id_hash", "browser",
-	// "country_code", or the special value "session_returning".
-	Field string
-	// Op is the comparison operator: "eq", "neq", "is_null", "is_not_null".
-	Op string
-	// Value is the right-hand side for "eq" / "neq" operators.
-	Value string
-}
-
-// segmentParam returns a SQL WHERE fragment with a placeholder and the value to bind,
-// plus whether a sessions JOIN is needed.
-// arg is nil when no bind parameter is needed for the clause (e.g. IS NULL checks).
-func segmentParam(seg *SegmentFilter) (clause string, arg any, needSessionJoin bool) {
-	if seg == nil {
-		return "", nil, false
-	}
-	if seg.Field == "session_returning" {
-		if seg.Value == "true" {
-			return "s.event_count > 1", nil, true
-		}
-		return "s.event_count = 1", nil, true
-	}
-
-	// Whitelist allowed field names to prevent column injection.
-	allowedFields := map[string]bool{
-		"device_type":  true,
-		"browser":      true,
-		"os":           true,
-		"country_code": true,
-		"user_id_hash": true,
-	}
-	if !allowedFields[seg.Field] {
-		return "", nil, false // silently ignore unknown fields
-	}
-
-	col := "e." + seg.Field
-	switch seg.Op {
-	case "eq":
-		return col + " = ?", seg.Value, false
-	case "neq":
-		return col + " != ?", seg.Value, false
-	case "is_null":
-		return fmt.Sprintf("(%s IS NULL OR %s = '')", col, col), nil, false
-	case "is_not_null":
-		return fmt.Sprintf("(%s IS NOT NULL AND %s != '')", col, col), nil, false
-	}
-	return "", nil, false
-}
-
 // AnalyzeFunnel computes conversion rates for each step of a funnel over a time range.
 // seg is the legacy preset filter; rules are additional stored segment conditions (ANDed together).
 func (s *ReadStore) AnalyzeFunnel(ctx context.Context, f Funnel, from, to time.Time, seg *SegmentFilter, rules ...SegmentRule) ([]FunnelStepResult, error) {
@@ -302,7 +261,8 @@ func (s *ReadStore) AnalyzeFunnel(ctx context.Context, f Funnel, from, to time.T
 	if scope == "" {
 		scope = "session"
 	}
-	pageViewScope := scope == "page_view"
+	pageViewScope := scope == FunnelScopePageView
+	userScope := scope == FunnelScopeUser
 
 	// Build WHERE clause from preset segment filter.
 	presetClause, presetArg, needJoin := segmentParam(seg)
@@ -327,10 +287,21 @@ func (s *ReadStore) AnalyzeFunnel(ctx context.Context, f Funnel, from, to time.T
 	if pageViewScope {
 		extraClauses = append(extraClauses, "e.page_view_id IS NOT NULL")
 	}
+	if userScope {
+		extraClauses = append(extraClauses, "e.user_id_hash IS NOT NULL AND e.user_id_hash != ''")
+	}
 
 	extraWhere := ""
 	if len(extraClauses) > 0 {
 		extraWhere = " AND " + strings.Join(extraClauses, " AND ")
+	}
+
+	if userScope {
+		counts, err := s.orderedUserStepCounts(ctx, f, from, to, extraWhere, extraArgs, needJoin)
+		if err != nil {
+			return nil, err
+		}
+		return funnelResults(f, counts), nil
 	}
 
 	// Choose the distinct column based on scope.
@@ -362,20 +333,18 @@ func (s *ReadStore) AnalyzeFunnel(ctx context.Context, f Funnel, from, to time.T
 		args = append([]any{f.ProjectID, step.EventName, from, to}, extraArgs...)
 
 		// Step-level property filters.
-		for _, filter := range step.Filters {
-			if !validPropertyName.MatchString(filter.Property) {
-				continue
-			}
-			q += fmt.Sprintf(" AND json_extract(e.properties, '$.%s') = ?", filter.Property)
-			args = append(args, filter.Value)
-		}
+		q, args = stepFilterClause(q, args, step)
 
 		if err := s.rdb.QueryRowContext(ctx, q, args...).Scan(&n); err != nil {
 			return nil, fmt.Errorf("analyze step %d: %w", i, err)
 		}
 		stepCounts[i] = n
 	}
+	return funnelResults(f, stepCounts), nil
+}
 
+// funnelResults turns per-step counts into conversion and drop-off rates.
+func funnelResults(f Funnel, stepCounts []int64) []FunnelStepResult {
 	results := make([]FunnelStepResult, len(f.Steps))
 	entry := stepCounts[0]
 	for i, step := range f.Steps {
@@ -388,7 +357,19 @@ func (s *ReadStore) AnalyzeFunnel(ctx context.Context, f Funnel, from, to time.T
 		}
 		results[i] = r
 	}
-	return results, nil
+	return results
+}
+
+// stepFilterClause appends a step's property filters to a step query.
+func stepFilterClause(q string, args []any, step FunnelStep) (string, []any) {
+	for _, filter := range step.Filters {
+		if !validPropertyName.MatchString(filter.Property) {
+			continue
+		}
+		q += fmt.Sprintf(" AND json_extract(e.properties, '$.%s') = ?", filter.Property)
+		args = append(args, filter.Value)
+	}
+	return q, args
 }
 
 // SessionsAtStep returns distinct session IDs that completed step stepOrder
@@ -479,96 +460,6 @@ func (s *ReadStore) SessionsAtStep(ctx context.Context, f Funnel, stepOrder int,
 		if len(out) >= limit {
 			break
 		}
-	}
-	return out, nil
-}
-
-// buildSegmentRuleClause converts stored segment rules into a SQL WHERE fragment.
-func buildSegmentRuleClause(rules []SegmentRule) (clause string, args []any, needJoin bool) {
-	if len(rules) == 0 {
-		return "", nil, false
-	}
-	var parts []string
-	for _, rule := range rules {
-		tableAlias, ok := AllowedSegmentFields[rule.Field]
-		if !ok {
-			continue
-		}
-		if tableAlias == "s" {
-			needJoin = true
-		}
-		col := tableAlias + "." + rule.Field
-		switch rule.Operator {
-		case "eq":
-			parts = append(parts, col+" = ?")
-			args = append(args, rule.Value)
-		case "neq":
-			parts = append(parts, col+" != ?")
-			args = append(args, rule.Value)
-		case "contains":
-			parts = append(parts, col+" LIKE ?")
-			args = append(args, "%"+rule.Value+"%")
-		case "not_contains":
-			parts = append(parts, col+" NOT LIKE ?")
-			args = append(args, "%"+rule.Value+"%")
-		case "is_null":
-			parts = append(parts, fmt.Sprintf("(%s IS NULL OR %s = '')", col, col))
-		case "is_not_null":
-			parts = append(parts, fmt.Sprintf("(%s IS NOT NULL AND %s != '')", col, col))
-		}
-	}
-	if len(parts) == 0 {
-		return "", nil, false
-	}
-	return strings.Join(parts, " AND "), args, needJoin
-}
-
-// FunnelSegments holds distinct values available for dynamic segment filtering.
-type FunnelSegments struct {
-	DeviceTypes []string `json:"device_types"`
-	Browsers    []string `json:"browsers"`
-	Countries   []string `json:"countries"`
-}
-
-// FunnelSegmentData returns distinct field values present in the events for a project.
-func (s *ReadStore) FunnelSegmentData(ctx context.Context, projectID string) (FunnelSegments, error) {
-	var out FunnelSegments
-
-	// Column names are interpolated into SQL, so guard against any caller ever
-	// passing an unvetted value: only an explicit allowlist of event columns is
-	// permitted. Callers below pass literals; this is defence-in-depth.
-	allowedDistinctCols := map[string]bool{"device_type": true, "browser": true, "country_code": true}
-
-	fetchDistinct := func(col string) ([]string, error) {
-		if !allowedDistinctCols[col] {
-			return nil, fmt.Errorf("FunnelSegmentData: disallowed column %q", col)
-		}
-		q := fmt.Sprintf(`SELECT DISTINCT %s FROM events WHERE project_id = ? AND %s IS NOT NULL AND %s != '' ORDER BY %s`, col, col, col, col)
-		rows, err := s.rdb.QueryContext(ctx, q, projectID)
-		if err != nil {
-			return nil, err
-		}
-		defer rows.Close()
-		var vals []string
-		for rows.Next() {
-			var v string
-			if err := rows.Scan(&v); err != nil {
-				return nil, err
-			}
-			vals = append(vals, v)
-		}
-		return vals, rows.Err()
-	}
-
-	var err error
-	if out.DeviceTypes, err = fetchDistinct("device_type"); err != nil {
-		return out, err
-	}
-	if out.Browsers, err = fetchDistinct("browser"); err != nil {
-		return out, err
-	}
-	if out.Countries, err = fetchDistinct("country_code"); err != nil {
-		return out, err
 	}
 	return out, nil
 }

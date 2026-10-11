@@ -3,6 +3,8 @@ import { reportError } from './bugbarn'
 import { ApiError } from './api-error'
 import type { IambarnConfig } from './iambarn-config'
 import type { LogoutResponse } from './auth-types'
+import type { Funnel, FunnelAnalysis, FunnelScope, FunnelSegments, FunnelStepInput, StepResult } from './funnel-types'
+export type { Funnel, FunnelAnalysis, FunnelScope, FunnelSegments, FunnelStep, FunnelStepInput, StepResult } from './funnel-types'
 
 export { ApiError }
 
@@ -142,10 +144,10 @@ export const api = {
   listFunnels: (projectId: string) =>
     request<{ funnels: Funnel[] }>(`/api/v1/projects/${projectId}/funnels`),
 
-  createFunnel: (projectId: string, name: string, steps: FunnelStepInput[], scope?: 'session' | 'page_view') =>
+  createFunnel: (projectId: string, name: string, steps: FunnelStepInput[], scope?: FunnelScope, conversionWindowSeconds?: number) =>
     request<Funnel>(`/api/v1/projects/${projectId}/funnels`, {
       method: 'POST',
-      body: JSON.stringify({ name, steps, scope: scope ?? 'session' }),
+      body: JSON.stringify({ name, steps, scope: scope ?? 'session', conversion_window_seconds: conversionWindowSeconds }),
     }),
 
   getFunnelAnalysis: (projectId: string, funnelId: string, segment?: string, segmentId?: string) => {
@@ -159,7 +161,7 @@ export const api = {
   getFunnelSegments: (projectId: string, funnelId: string) =>
     request<FunnelSegments>(`/api/v1/projects/${projectId}/funnels/${funnelId}/segments`),
 
-  updateFunnel: (projectId: string, funnelId: string, data: { name: string; description?: string; scope?: string; steps: FunnelStepInput[] }) =>
+  updateFunnel: (projectId: string, funnelId: string, data: { name: string; description?: string; scope?: FunnelScope; conversion_window_seconds?: number; steps: FunnelStepInput[] }) =>
     request<Funnel>(`/api/v1/projects/${projectId}/funnels/${funnelId}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -501,52 +503,6 @@ export interface Event {
   name: string
   url: string
   occurred_at: string
-}
-
-export interface FunnelStep {
-  step_order: number
-  event_name: string
-  filters?: { property: string; value: string }[]
-}
-
-export interface FunnelStepInput {
-  event_name: string
-  filters?: { property: string; value: string }[]
-}
-
-export interface Funnel {
-  id: string
-  name: string
-  description?: string
-  scope: 'session' | 'page_view'
-  steps: FunnelStep[]
-  /**
-   * Step event names this project has never emitted. A funnel that references
-   * them can never report a conversion, and otherwise looks identical to a
-   * legitimate funnel that nobody has converted through yet. Read-only.
-   */
-  unmatched_steps?: string[]
-}
-
-export interface StepResult {
-  step_order: number
-  event_name: string
-  count: number
-  conversion: number
-  drop_off: number
-}
-
-export interface FunnelAnalysis {
-  funnel: Funnel
-  results: StepResult[]
-  from: string
-  to: string
-}
-
-export interface FunnelSegments {
-  device_types: string[]
-  browsers: string[]
-  countries: string[]
 }
 
 export interface SegmentRule {
