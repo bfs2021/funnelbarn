@@ -150,10 +150,10 @@ func (s *Server) handleIngestRecordingChunk(w http.ResponseWriter, r *http.Reque
 		attribute.Int("chunk.events.count", len(chunk.Events)),
 	)
 
-	if err := s.recordings.IngestChunk(ctx, chunk); err != nil {
+	if err := s.ingestChunkDetached(ctx, chunk); err != nil {
 		tracing.RecordError(span, err)
 		slog.ErrorContext(ctx, "ingest recording chunk failed",
-			"error", err, "handled", false,
+			"error", err.Error(), "handled", false,
 			"recording_id", chunk.RecordingID,
 			"project_id", chunk.ProjectID,
 			"chunk_index", chunk.ChunkIndex,
@@ -282,7 +282,7 @@ func (s *Server) handleGetRecordingChunk(w http.ResponseWriter, r *http.Request)
 		}
 		tracing.RecordError(span, err)
 		slog.ErrorContext(ctx, "fetch recording chunk failed",
-			"error", err, "handled", false,
+			"error", err.Error(), "handled", false,
 			"recording_id", recordingID,
 			"project_id", projectID,
 			"chunk_index", index,
@@ -324,7 +324,7 @@ func (s *Server) handleDeleteRecording(w http.ResponseWriter, r *http.Request) {
 		}
 		tracing.RecordError(span, err)
 		slog.ErrorContext(ctx, "delete recording failed",
-			"error", err, "handled", false,
+			"error", err.Error(), "handled", false,
 			"recording_id", recordingID,
 			"project_id", projectID,
 			"request_id", RequestIDFromContext(ctx),
@@ -473,7 +473,7 @@ func (s *Server) handleGetRecordingChunkByKey(w http.ResponseWriter, r *http.Req
 		}
 		tracing.RecordError(span, err)
 		slog.ErrorContext(ctx, "fetch recording chunk (api key) failed",
-			"error", err, "handled", false,
+			"error", err.Error(), "handled", false,
 			"recording_id", recordingID, "project_id", projectID, "chunk_index", index,
 			"request_id", RequestIDFromContext(ctx),
 		)
