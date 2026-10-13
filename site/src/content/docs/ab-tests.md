@@ -83,7 +83,7 @@ curl "http://localhost:8080/api/v1/projects/my-project/abtests/test-id/analysis?
   "variant_sample":      4980,
   "variant_conversions": 310,
   "significant":         true,
-  "z_score":             2.31,
+  "z_score":             2.66,
   "from": "2024-01-24T00:00:00Z",
   "to":   "2024-01-31T23:59:59Z"
 }
