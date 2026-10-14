@@ -61,3 +61,6 @@ web/coverage/
 # fleet. Local convenience, not repo config.
 .bugbarn.json
 .spanbarn.json
+
+.tools/
+.ci-venv/
