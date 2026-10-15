@@ -47,10 +47,10 @@ func classifyArgs(args []string) argAction {
 func handleUsageArgs(args []string, stdout, stderr io.Writer) (handled bool, code int) {
 	switch classifyArgs(args) {
 	case actionHelp:
-		fmt.Fprintln(stdout, usageText)
+		_, _ = fmt.Fprintln(stdout, usageText)
 		return true, 0
 	case actionUnknown:
-		fmt.Fprintf(stderr, "funnelbarn: unknown argument %q\n%s\n", args[0], usageText)
+		_, _ = fmt.Fprintf(stderr, "funnelbarn: unknown argument %q\n%s\n", args[0], usageText)
 		return true, 1
 	}
 	return false, 0
