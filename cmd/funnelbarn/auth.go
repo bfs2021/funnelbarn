@@ -8,11 +8,11 @@ import (
 	"time"
 
 	"github.com/wiebe-xyz/funnelbarn/internal/auth"
+	"github.com/wiebe-xyz/funnelbarn/internal/bblog"
 	"github.com/wiebe-xyz/funnelbarn/internal/command"
 	"github.com/wiebe-xyz/funnelbarn/internal/config"
 	"github.com/wiebe-xyz/funnelbarn/internal/environment"
 	"github.com/wiebe-xyz/funnelbarn/internal/repository"
-	"github.com/wiebe-xyz/funnelbarn/internal/service"
 )
 
 // buildOIDCClient returns an OIDC adapter when all four FUNNELBARN_OIDC_* vars
@@ -83,8 +83,12 @@ func apiKeyToucher(store *repository.Store, commands command.Bus) auth.DBKeyTouc
 		if !th.due(keySHA256, time.Now()) {
 			return nil
 		}
-		waited := commands.Submit(ctx, command.TouchAPIKey{KeyHash: keySHA256})
-		service.AddSubmitWait(ctx, waited)
+		// The touch is bookkeeping: submit off the request goroutine so a slow
+		// publish to Valkey never adds to the request's latency (FUN-33).
+		detached := context.WithoutCancel(ctx)
+		bblog.Go("apikey-touch-submit", func() {
+			commands.Submit(detached, command.TouchAPIKey{KeyHash: keySHA256})
+		})
 		return nil
 	}
 }

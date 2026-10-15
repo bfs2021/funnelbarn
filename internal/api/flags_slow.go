@@ -11,7 +11,6 @@ import (
 
 	"github.com/wiebe-xyz/funnelbarn/internal/bblog"
 	"github.com/wiebe-xyz/funnelbarn/internal/command"
-	"github.com/wiebe-xyz/funnelbarn/internal/service"
 )
 
 // Slow-evaluate thresholds (specs/012-cqrs-read-write-split/spec.md, "Async
@@ -112,13 +111,52 @@ func (s *Server) reportEvaluate(ctx context.Context, span trace.Span, projectID,
 	)
 }
 
+// flagsHealthInterval is the minimum time between queued health marks for one
+// project. The health state is read in minutes, so a minute loses nothing.
+const flagsHealthInterval = time.Minute
+
+// maxTrackedHealthProjects bounds the map; a reset costs one extra mark per
+// project.
+const maxTrackedHealthProjects = 4096
+
+// markThrottle remembers when each project was last marked. Its zero value is
+// ready.
+type markThrottle struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+}
+
+// due reports whether projectID is due for a mark and records it if so.
+func (t *markThrottle) due(projectID string, now time.Time) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if prev, ok := t.last[projectID]; ok && now.Sub(prev) < flagsHealthInterval {
+		return false
+	}
+	if t.last == nil || len(t.last) >= maxTrackedHealthProjects {
+		t.last = make(map[string]time.Time)
+	}
+	t.last[projectID] = now
+	return true
+}
+
 // markFlagsEvaluated records that the project called the evaluate endpoint. It
 // is queued when a dispatcher is configured; the health service's in-memory
 // cache makes the applied command a cheap lookup after the first success.
+//
+// The mark is bookkeeping, so it never makes the request wait: at most one
+// command per project per flagsHealthInterval is submitted, and the submit
+// runs off the request goroutine (FUN-33: a publish to the shared Valkey took
+// 60 to 740 ms on the evaluate path).
 func (s *Server) markFlagsEvaluated(ctx context.Context, projectID string) {
 	if s.commands != nil {
-		waited := s.commands.Submit(ctx, command.MarkFlagsEvaluated{ProjectID: projectID})
-		service.AddSubmitWait(ctx, waited)
+		if !s.healthMark.due(projectID, time.Now()) {
+			return
+		}
+		detached := context.WithoutCancel(ctx)
+		bblog.Go("flags-health-submit", func() {
+			s.commands.Submit(detached, command.MarkFlagsEvaluated{ProjectID: projectID})
+		})
 		return
 	}
 	bblog.Go("flags-health", func() {

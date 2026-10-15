@@ -187,6 +187,7 @@ type Server struct {
 	internalToken       string
 	slow                slowEvaluate
 	slowLog             slowLogLimiter
+	healthMark          markThrottle
 	spanRelay           *tracing.SpanRelay
 	mcpResourceURL      string
 
