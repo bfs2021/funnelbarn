@@ -56,6 +56,17 @@ func registerFlagTools(s *mcp.Server, d *Deps) {
 	}, scopeRead, listFlagContextKeys)
 
 	addTool(s, d, &mcp.Tool{
+		Name: "flag_usage",
+		Description: "Per flag, the recorded evaluations of the last 30 UTC days: totals for 7 and " +
+			"30 days, a daily series, the variant split and last_evaluated_at, most used first. " +
+			"Counts are recorded evaluations, one row per evaluation of an experiment flag, " +
+			"not sampled and not deduplicated per user; config flags, dry runs and disabled flags " +
+			"record no row. stale means no evaluations in the last 30 days and nothing more: " +
+			"deleting a flag stays your decision (delete_flag).",
+		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true, OpenWorldHint: ptr(false)},
+	}, scopeRead, flagUsage)
+
+	addTool(s, d, &mcp.Tool{
 		Name: "evaluate_flag",
 		Description: "Resolve a flag evaluation for a given context, exactly the way an SDK " +
 			"would. Unlike an SDK's own evaluate call, this never auto-registers an unrecognised " +
@@ -313,6 +324,24 @@ func listFlagContextKeys(ctx context.Context, c *Call, in listFlagContextKeysIn)
 		out.ContextKeys[i] = contextKeySuggestion{ContextKey: s.ContextKey, SeenCount: s.SeenCount, Pct: s.Pct}
 	}
 	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// flag_usage
+// ---------------------------------------------------------------------------
+
+type flagUsageIn struct {
+	Project string `json:"project,omitempty" jsonschema:"Project slug or ID; defaults to the repository's project from the x-funnelbarn-project header."`
+}
+
+// flagUsage returns service.FlagUsageReport as is, so the MCP output and the
+// REST endpoint cannot drift apart.
+func flagUsage(ctx context.Context, c *Call, in flagUsageIn) (service.FlagUsageReport, error) {
+	p, err := c.Project(ctx, in.Project)
+	if err != nil {
+		return service.FlagUsageReport{}, err
+	}
+	return c.Deps.Flags.Usage(ctx, p.ID)
 }
 
 // ---------------------------------------------------------------------------

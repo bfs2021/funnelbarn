@@ -87,6 +87,7 @@ type FlagQueries interface {
 	FlagByKey(ctx context.Context, projectID, flagKey string) (repository.FeatureFlag, error)
 	ListFlags(ctx context.Context, projectID string) ([]repository.FeatureFlag, error)
 	FlagContextKeySuggestions(ctx context.Context, projectID string) ([]repository.ContextKeySuggestion, error)
+	FlagUsageDaily(ctx context.Context, projectID string, from, to time.Time) ([]repository.FlagUsageRow, error)
 	CountEvaluationsByVariant(ctx context.Context, flagID string, from, to time.Time) (map[string]int64, error)
 	CountConversionsByVariant(ctx context.Context, flagID, conversionEvent, projectID string, from, to time.Time) (map[string]int64, error)
 }

@@ -51,6 +51,10 @@ type FlagService struct {
 	touchedMu sync.Mutex
 	touchedAt map[string]time.Time
 
+	// usageMu guards usageCache, the per-project Usage report (flag_usage.go).
+	usageMu    sync.Mutex
+	usageCache map[string]flagUsageCacheEntry
+
 	// commands, when set, takes every write the evaluate path used to make
 	// synchronously (see flags_async.go). Nil keeps the synchronous behaviour.
 	commands command.Bus

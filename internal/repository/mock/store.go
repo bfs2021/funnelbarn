@@ -11,6 +11,10 @@ func (s *Store) FlagContextKeySuggestions(_ context.Context, _ string) ([]reposi
 	return nil, nil
 }
 
+func (s *Store) FlagUsageDaily(_ context.Context, _ string, _, _ time.Time) ([]repository.FlagUsageRow, error) {
+	return nil, nil
+}
+
 func (s *Store) AnonymizeSessionGeo(_ context.Context, _ string) error { return nil }
 
 func (s *Store) SessionDistributions(_ context.Context, _ string) (map[string][]repository.DistributionEntry, error) {

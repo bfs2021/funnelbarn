@@ -190,7 +190,7 @@ Tools (write tools need `mcp:write`):
 - **Analytics**: `get_stats`, `list_event_names`, `get_event_counts`, `list_events`, `list_event_properties`, `list_event_property_values`, `list_environments`
 - **Funnels**: `list_funnels`, `analyze_funnel`; write: `create_funnel`, `update_funnel`, `delete_funnel`
 - **Segments**: `list_segments`; write: `create_segment`, `update_segment`, `delete_segment`
-- **Feature flags**: `list_flags`, `get_flag`, `analyze_flag`, `list_flag_context_keys`, `evaluate_flag` (a dry run: never creates a flag or records an evaluation); write: `create_flag`, `update_flag`, `delete_flag`
+- **Feature flags**: `list_flags`, `get_flag`, `analyze_flag`, `list_flag_context_keys`, `flag_usage` (recorded evaluations per flag over 30 days, with a stale marker for flags that had none), `evaluate_flag` (a dry run: never creates a flag or records an evaluation); write: `create_flag`, `update_flag`, `delete_flag`
 - **Setup**: `get_setup_guide` returns the same document as `GET /api/v1/setup/{slug}`
 
 Call `list_event_names` before building a funnel, so each step matches an event the project actually sends. Dates are RFC 3339 or `YYYY-MM-DD`; ranges default to the last 7 days.
