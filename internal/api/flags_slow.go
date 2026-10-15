@@ -95,7 +95,7 @@ func (s *Server) reportEvaluate(ctx context.Context, span trace.Span, projectID,
 	if total <= s.slow.total && submitWait <= s.slow.submitWait {
 		return
 	}
-	ok, suppressed := s.slowLog.allow(projectID, time.Now())
+	ok, suppressed := s.evalLimits.slowLog.allow(projectID, time.Now())
 	if !ok {
 		return
 	}
@@ -109,6 +109,13 @@ func (s *Server) reportEvaluate(ctx context.Context, span trace.Span, projectID,
 		"pool_wait_ms", ms(poolWait),
 		"request_id", RequestIDFromContext(ctx),
 	)
+}
+
+// evaluateLimits groups the per-project rate limiters of the evaluate path; its
+// zero value is ready.
+type evaluateLimits struct {
+	slowLog    slowLogLimiter
+	healthMark markThrottle
 }
 
 // flagsHealthInterval is the minimum time between queued health marks for one
@@ -150,7 +157,7 @@ func (t *markThrottle) due(projectID string, now time.Time) bool {
 // 60 to 740 ms on the evaluate path).
 func (s *Server) markFlagsEvaluated(ctx context.Context, projectID string) {
 	if s.commands != nil {
-		if !s.healthMark.due(projectID, time.Now()) {
+		if !s.evalLimits.healthMark.due(projectID, time.Now()) {
 			return
 		}
 		detached := context.WithoutCancel(ctx)

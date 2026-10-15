@@ -186,8 +186,7 @@ type Server struct {
 	forwarder           *writeForwarder // nil unless this is a reader
 	internalToken       string
 	slow                slowEvaluate
-	slowLog             slowLogLimiter
-	healthMark          markThrottle
+	evalLimits          evaluateLimits
 	spanRelay           *tracing.SpanRelay
 	mcpResourceURL      string
 
