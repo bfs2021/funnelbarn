@@ -107,6 +107,9 @@ func isHealthProbeLog(r slog.Record) bool {
 
 // run owns process wiring: opens storage, starts the worker, and serves the API.
 func run() error {
+	if handled, code := handleUsageArgs(os.Args[1:], os.Stdout, os.Stderr); handled {
+		os.Exit(code)
+	}
 	cfg := config.Load()
 
 	// Runtime version: the deploy injects the actual release tag via
