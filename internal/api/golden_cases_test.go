@@ -173,6 +173,7 @@ func goldenGETCases(s *goldenSeed) []goldenCase {
 	sess("flag_analysis_targeted", p(A, "/flags/"+s.FlagTargeted+"/analysis?range=30d"))
 	sess("flag_analysis_config", p(A, "/flags/"+s.FlagConfig+"/analysis"))
 	sess("flag_context_keys_a", p(A, "/flags/context-keys"))
+	sess("flag_usage_a", p(A, "/flags/usage"))
 
 	// A/B tests, widgets, segments.
 	sess("abtests_a", p(A, "/abtests"))

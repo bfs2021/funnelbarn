@@ -65,6 +65,7 @@ type Flags interface {
 	EvaluateOrRegisterFlag(ctx context.Context, projectID, flagKey string, evalContext map[string]any, defaultValue any, maxAuto int, kind string) (FlagEvalResult, error)
 	AnalyzeFlag(ctx context.Context, flag repository.FeatureFlag, from, to time.Time) ([]repository.FlagAnalysisResult, error)
 	ContextKeySuggestions(ctx context.Context, projectID string) ([]repository.ContextKeySuggestion, error)
+	Usage(ctx context.Context, projectID string) (FlagUsageReport, error)
 }
 
 // ABTests is the interface for A/B test-related operations.

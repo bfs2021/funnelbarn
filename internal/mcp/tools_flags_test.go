@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/wiebe-xyz/funnelbarn/internal/repository"
+	"github.com/wiebe-xyz/funnelbarn/internal/service"
 )
 
 // createManualFlag inserts a flag straight through the store (bypassing
@@ -701,6 +702,41 @@ func TestListFlagContextKeysTool(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// flag_usage
+// ---------------------------------------------------------------------------
+
+func TestFlagUsageTool(t *testing.T) {
+	env := newTestEnv(t, nil)
+	p := env.createProject(t, "Alpha", "alpha")
+	createManualFlag(t, env, p.ID, "usedflag", nil)
+	createManualFlag(t, env, p.ID, "idleflag", nil)
+	for i := 0; i < 3; i++ {
+		if _, err := env.Deps.Flags.EvaluateFlag(context.Background(), p.ID, "usedflag", map[string]any{
+			"targetingKey": fmt.Sprintf("user-%d", i),
+		}); err != nil {
+			t.Fatalf("EvaluateFlag: %v", err)
+		}
+	}
+
+	cs := env.connect(t, tokenRead, p.Slug)
+	var out service.FlagUsageReport
+	callOK(t, cs, "flag_usage", nil, &out)
+
+	if out.WindowDays != 30 || out.CountsNote == "" || out.StaleNote == "" {
+		t.Errorf("report header = %+v, want window 30 and both notes", out)
+	}
+	if len(out.Flags) != 2 {
+		t.Fatalf("want 2 flags, got %+v", out.Flags)
+	}
+	if out.Flags[0].FlagKey != "usedflag" || out.Flags[0].Evaluations30d != 3 {
+		t.Errorf("first flag = %s with %d evaluations, want usedflag with 3", out.Flags[0].FlagKey, out.Flags[0].Evaluations30d)
+	}
+	if out.Flags[1].Evaluations30d != 0 {
+		t.Errorf("idleflag evaluations = %d, want 0", out.Flags[1].Evaluations30d)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // annotations
 // ---------------------------------------------------------------------------
 
@@ -715,7 +751,7 @@ func TestFlagTools_Annotations(t *testing.T) {
 
 	readOnly := map[string]bool{
 		"list_flags": false, "get_flag": false, "analyze_flag": false,
-		"list_flag_context_keys": false, "evaluate_flag": false,
+		"list_flag_context_keys": false, "evaluate_flag": false, "flag_usage": false,
 	}
 	nonDestructiveWrites := map[string]bool{"create_flag": false, "update_flag": false}
 	destructive := map[string]bool{"delete_flag": false}
