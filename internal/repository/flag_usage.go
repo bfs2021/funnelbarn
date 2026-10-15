@@ -36,7 +36,7 @@ func (r *ReadStore) FlagUsageDaily(ctx context.Context, projectID string, from, 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var out []FlagUsageRow
 	for rows.Next() {
 		var row FlagUsageRow
