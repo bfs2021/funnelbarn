@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom'
+
 const C = {
   bg: '#0f1117',
   surface: '#1a1d27',
@@ -87,6 +89,26 @@ export function StatCard({ label, sample, conversions, rate, winner }: {
           <div style={{ fontSize: 12, color: C.muted }}>conversion rate</div>
         </div>
       </div>
+    </div>
+  )
+}
+
+// FlagsTitle is the page heading for the flags area, with a link to the other
+// view of it (the flag list and the usage report).
+export function FlagsTitle({ projectId, active }: { projectId: string; active: 'flags' | 'usage' }) {
+  const link = (to: string, label: string, on: boolean) => (
+    <Link to={to} aria-current={on ? 'page' : undefined} style={{
+      fontSize: 14, fontWeight: 600, textDecoration: 'none',
+      color: on ? C.amber : C.muted, borderBottom: on ? `2px solid ${C.amber}` : '2px solid transparent', paddingBottom: 2,
+    }}>
+      {label}
+    </Link>
+  )
+  return (
+    <div style={{ display: 'flex', alignItems: 'baseline', gap: '1.25rem' }}>
+      <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-0.5px', margin: 0 }}>Flags</h1>
+      {link(`/flags/${projectId}`, 'Flags', active === 'flags')}
+      {link(`/flags/${projectId}/usage`, 'Usage', active === 'usage')}
     </div>
   )
 }

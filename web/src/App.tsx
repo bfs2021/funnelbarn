@@ -11,6 +11,7 @@ import Settings from './pages/Settings'
 import Account from './pages/Account'
 import IntegrationHealth from './pages/IntegrationHealth'
 import Flags from './pages/Flags'
+import FlagUsage from './pages/FlagUsage'
 import Insights from './pages/Insights'
 import Flows from './pages/Flows'
 import Sessions from './pages/Sessions'
@@ -216,6 +217,10 @@ function AppRoutes() {
         <Route
           path="/flags/:projectId"
           element={<ProtectedRoute><Flags /></ProtectedRoute>}
+        />
+        <Route
+          path="/flags/:projectId/usage"
+          element={<ProtectedRoute><FlagUsage /></ProtectedRoute>}
         />
         <Route
           path="/insights"

@@ -8,7 +8,7 @@ import { useProjects } from '../lib/projects'
 import { reportError } from '../lib/bugbarn'
 import { trackEvent } from '../lib/analytics'
 import { Skeleton } from '../components/ui/Skeleton'
-import { C, statusBadge, originBadge, StatCard } from '../components/flags/shared'
+import { C, statusBadge, originBadge, StatCard, FlagsTitle } from '../components/flags/shared'
 import { FlagFormModal } from '../components/flags/FlagFormModal'
 
 // alignBooleanSplit produces a new split where the *new default* is always
@@ -633,7 +633,7 @@ export default function Flags() {
       )}
 
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1.5rem' }}>
-        <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: '-0.5px', margin: 0 }}>Flags</h1>
+        <FlagsTitle projectId={projectId} active="flags" />
         <button onClick={() => setShowCreate(true)} style={{
           display: 'flex', alignItems: 'center', gap: 6,
           background: C.amber, border: 'none', borderRadius: 8,

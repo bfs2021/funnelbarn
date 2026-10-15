@@ -17,7 +17,7 @@ function getCookie(name: string): string | undefined {
 // k8s rollout in flight (pod cycling) — they recover in a couple of seconds.
 const TRANSIENT_STATUSES = new Set([502, 503, 504])
 
-async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
+export async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', ...options.headers as Record<string, string> }
 
   const method = (options.method || 'GET').toUpperCase()
