@@ -270,12 +270,14 @@ func run() error {
 	if isReader(cfg) {
 		healthSvc = service.NewProjectHealthService(service.HealthViaCommands{ProjectHealthRepo: store, Bus: commands})
 	}
+	flagBookkeeping := newFlagBookkeeping(ctx, commands, slog.Default())
+	defer drainCommands(flagBookkeeping) // deferred LIFO: hands its queue to commands before they drain
 
 	// Wire services.
 	projectsSvc := service.NewProjectService(store)
 	funnelsSvc := service.NewFunnelService(store)
 	abtestsSvc := service.NewABTestService(store)
-	flagsSvc := service.NewFlagService(store).WithConfigCacheTTL(time.Duration(cfg.ConfigFlagCacheSeconds) * time.Second).WithCommands(commands)
+	flagsSvc := service.NewFlagService(store).WithConfigCacheTTL(time.Duration(cfg.ConfigFlagCacheSeconds) * time.Second).WithCommands(commands).WithBackgroundCommands(flagBookkeeping)
 	eventsSvc := service.NewEventService(store)
 	overviewSvc := service.NewOverviewService(store)
 	sessionsSvc := service.NewSessionService(store)

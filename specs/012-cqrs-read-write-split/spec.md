@@ -33,6 +33,7 @@
 - **FR-020**: Traffic sent to a reader while the writer is stopped MUST land exactly once after the writer returns, including after a Valkey outage and a crash between apply and ack. Issues: [#302](https://github.com/webwiebe/funnelbarn/issues/302). Tests: `cmd/funnelbarn/durability_test.go::TestReaderTrafficSurvivesAStoppedWriter`.
 - **FR-021**: Each maintenance step MUST emit a child span under `maintenance.purge`. Issues: [#302](https://github.com/webwiebe/funnelbarn/issues/302). Tests: `cmd/funnelbarn/maintenance_test.go::TestRunMaintenance_EmitsRootAndStepSpans`.
 - **FR-022**: The post-deploy check on testing MUST probe evaluate latency and look for a `maintenance.purge` span. Issues: [#307](https://github.com/webwiebe/funnelbarn/issues/307). Tests: `scripts/verify-testing.sh` (a script; no test file).
+- **FR-023**: The evaluate path MUST hand the evaluation row and the `last_evaluated_at` touch to a bounded worker pool (`command.Async`) and wait only for a buffer slot; a full buffer blocks and drops nothing, and shutdown hands the queue to the bus before the bus drains. `EnsureAutoFlag` stays on the bus, so a new flag is published before its touch is queued. Issues: [#337](https://github.com/webwiebe/funnelbarn/issues/337). Tests: `internal/command/async_test.go::TestAsyncSubmitDoesNotWaitForTheInnerBus`, `internal/command/async_test.go::TestAsyncBackpressureBlocksAndNeverDrops`, `internal/command/async_test.go::TestAsyncFlushWaitsForEveryWorker`, `internal/command/async_test.go::TestAsyncCloseDrainsAndLeavesTheInnerBusOpen`, `internal/service/flags_async_internal_test.go::TestEvaluate_BookkeepingGoesToTheBackgroundBus`.
 
 ---
 
@@ -131,6 +132,8 @@ The `bookkeeping` queue shipped first, with a standalone consume and an in-proce
 
 After a failed publish, commands go straight to the in-process fallback for a cooldown (5 s), so an outage that times out instead of refusing connections costs one publish timeout, and evaluate does not wait two seconds on every call. The evaluation id is fixed before the publish, so a push that lands while its reply times out stores one row on both paths.
 
+A publish to the shared Valkey is synchronous and took 60 to 200+ ms at times in production (#337, FUN-48), while the evaluation itself takes under a millisecond. The evaluation row and the `last_evaluated_at` touch therefore go through `command.Async`: four workers publish from a 1024-slot buffer, and the request waits only for the hand-off. Neither command depends on the order of others, so the workers may publish them out of order. `EnsureAutoFlag` is published on the request, before the new flag's touch is queued. The API key touch and the health mark were moved off the request path earlier (#353).
+
 Exactly one process consumes a queue: `Recover` requeues the whole processing list at startup, so a second live consumer would re-apply the first one's in-flight item. Standalone runs one replica, and the writer Deployment uses `Recreate`. A command whose apply fails is logged at Warn and acked, as in phase 1: the write connection has a 5 s busy timeout, and a retrying consumer would hold up every command behind a bad one.
 
 ### Durability while the writer or Redis is down
@@ -194,7 +197,7 @@ Async commands are eventually consistent: an evaluation row, a touch or an inges
 | Reader and writer Deployments | Deployment section | The writer is a Deployment with `Recreate`; readers are a StatefulSet with 2 replicas in each environment (`deploy/k8s/*/reader-statefulset.yaml`) |
 | Pod affinity keeps readers on the writer's node | How readers see the database | Both manifests use `nodeSelector` on `kubernetes.io/hostname` |
 | Reader and writer modes refuse to start without the token | Forwarding section | They also refuse to start without `FUNNELBARN_REDIS_QUEUE_URL` (`internal/config/mode_test.go::TestValidateMode`) |
-| Requests that read do not wait for writes | Design principle 2 | Evaluate waits up to 740 ms on Valkey publishes in production, per issue #337 (open); not established from the tree |
+| Requests that read do not wait for writes | Design principle 2 | Evaluate waits for a buffer slot only (FR-023); `EnsureAutoFlag` for an unknown key still publishes on the request. Production latency after the change is measured on issue #337 |
 | Evaluate logs at error level when slow | Async command dispatcher | `internal/api/flags_slow.go` logs `flag evaluate slow` at error level; issue #362 tracks the resulting BugBarn reports |
 | The latency test is opt-in through `FUNNELBARN_CONTENTION_TEST=1` | Verification | Holds (`internal/api/contention_test.go`) |
 
