@@ -267,13 +267,12 @@ jobs:
 
       - name: Dead code (knip ratchet)
         # Ratchet test blocks; it runs the real knip over throwaway packages.
-        # The gate itself is report-only while it soaks, until 2026-10-31: on
-        # that date drop --report-only (baseline 0) to enforce. The file floor
-        # fails the step in both modes.
+        # The gate is enforced against a baseline of 0
+        # (web/scripts/knip-ratchet.mjs); the file floor fails the step too.
         working-directory: web
         run: |
           pnpm lint:knip-test
-          pnpm lint:knip -- --report-only
+          pnpm lint:knip
 
       - name: Soak, web cyclomatic complexity at the estate target
         # REPORT-ONLY at complexity 12 via web/eslint.soak.config.js, while the
