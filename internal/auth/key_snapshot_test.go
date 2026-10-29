@@ -250,3 +250,68 @@ func TestValidForEvaluate_NoSnapshot(t *testing.T) {
 		t.Fatal("WithEvaluateKeys on nil must return an Authorizer")
 	}
 }
+
+// On a snapshot hit the last_used_at touch runs off the request: a touch that
+// blocks, as a SQLite write does in a stall, does not hold ValidForEvaluate.
+// It runs at most once per key per snapshotTouchInterval.
+func TestValidForEvaluate_TouchDoesNotBlockAndIsDebounced(t *testing.T) {
+	db := &keyDB{keys: map[string]KeyGrant{}}
+	db.add("sdk", "p1", "ingest")
+	clk := &fakeClock{now: time.Unix(1_700_000_000, 0)}
+	ks := NewKeySnapshot(db.list, notAnalytics, clk.Now)
+	release := make(chan struct{})
+	defer close(release)
+	touches := make(chan string, 10)
+	touch := func(ctx context.Context, sum string) error {
+		touches <- sum
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	a := New("").WithDBLookup(db.lookup, touch).WithEvaluateKeys(ks)
+	if err := ks.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 3; i++ {
+		done := make(chan bool, 1)
+		go func() {
+			_, _, ok := a.ValidForEvaluate(context.Background(), "sdk")
+			done <- ok
+		}()
+		select {
+		case ok := <-done:
+			if !ok {
+				t.Fatal("want the key accepted")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("ValidForEvaluate blocked on the touch")
+		}
+	}
+	select {
+	case got := <-touches:
+		if got != keyHash("sdk") {
+			t.Fatalf("touched %q", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the touch never ran")
+	}
+	select {
+	case <-touches:
+		t.Fatal("a second touch within the interval must be skipped")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	clk.advance(snapshotTouchInterval)
+	if _, _, ok := a.ValidForEvaluate(context.Background(), "sdk"); !ok {
+		t.Fatal("want the key accepted")
+	}
+	select {
+	case <-touches:
+	case <-time.After(5 * time.Second):
+		t.Fatal("after the interval the key must be touched again")
+	}
+}

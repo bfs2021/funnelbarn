@@ -36,6 +36,7 @@ func newFlagTokenServerWithLookup(t *testing.T, wrap func(auth.DBKeyLookupWithPr
 // field is optional.
 type flagTokenOpts struct {
 	wrapLookup func(auth.DBKeyLookupWithProject) auth.DBKeyLookupWithProject
+	wrapTouch  func(auth.DBKeyTouch) auth.DBKeyTouch
 	authz      func(*auth.Authorizer, *repository.Store) *auth.Authorizer
 	flags      func(*repository.Store) *service.FlagService
 }
@@ -48,7 +49,11 @@ func newFlagTokenServerOpts(t *testing.T, o flagTokenOpts) (*Server, *repository
 	if o.wrapLookup != nil {
 		lookup = o.wrapLookup(lookup)
 	}
-	authz := auth.New("global-instance-key").WithDBLookup(lookup, store.TouchAPIKey)
+	var touch auth.DBKeyTouch = store.TouchAPIKey
+	if o.wrapTouch != nil {
+		touch = o.wrapTouch(touch)
+	}
+	authz := auth.New("global-instance-key").WithDBLookup(lookup, touch)
 	if o.authz != nil {
 		authz = o.authz(authz, store)
 	}

@@ -15,12 +15,14 @@ import (
 	"github.com/wiebe-xyz/funnelbarn/internal/service"
 )
 
-// dbStall blocks the reads a test routes through it while stalled, as SQLite
-// did in the layer7 disk stalls of 2026-10-29.
+// dbStall blocks the reads and writes a test routes through it while stalled,
+// as SQLite did in the layer7 disk stalls of 2026-10-29. reads counts the
+// request-path reads; touches counts the last_used_at writes.
 type dbStall struct {
 	stalled atomic.Bool
 	release chan struct{}
 	reads   atomic.Int32
+	touches atomic.Int32
 }
 
 func newDBStall(t *testing.T) *dbStall {
@@ -31,6 +33,10 @@ func newDBStall(t *testing.T) *dbStall {
 
 func (d *dbStall) wait(ctx context.Context) error {
 	d.reads.Add(1)
+	return d.block(ctx)
+}
+
+func (d *dbStall) block(ctx context.Context) error {
 	if !d.stalled.Load() {
 		return nil
 	}
@@ -94,6 +100,15 @@ func newSnapshotEvaluateServer(t *testing.T) (*Server, *repository.Store, *dbSta
 				return next(ctx, sum)
 			}
 		},
+		wrapTouch: func(next auth.DBKeyTouch) auth.DBKeyTouch {
+			return func(ctx context.Context, sum string) error {
+				stall.touches.Add(1)
+				if err := stall.block(ctx); err != nil {
+					return err
+				}
+				return next(ctx, sum)
+			}
+		},
 		authz: func(a *auth.Authorizer, store *repository.Store) *auth.Authorizer {
 			keys = auth.NewKeySnapshot(storeKeyGrants(store), repository.APIKeyScopeEvaluatesFlags, nil)
 			return a.WithEvaluateKeys(keys)
@@ -116,9 +131,9 @@ func newSnapshotEvaluateServer(t *testing.T) (*Server, *repository.Store, *dbSta
 	return srv, store, stall, refresh
 }
 
-// A blocked database read does not block evaluate: with both snapshots loaded,
-// POST /api/v1/evaluate answers while the key lookup and the flag read would
-// wait on the stall.
+// A blocked database does not block evaluate: with both snapshots loaded,
+// POST /api/v1/evaluate answers while the key lookup, the flag read and the
+// last_used_at touch would all wait on the stall.
 func TestEvaluate_BlockedDatabaseReadDoesNotBlockEvaluate(t *testing.T) {
 	srv, store, stall, refresh := newSnapshotEvaluateServer(t)
 	p, _ := store.CreateProject(context.Background(), "P", "p")
@@ -142,6 +157,14 @@ func TestEvaluate_BlockedDatabaseReadDoesNotBlockEvaluate(t *testing.T) {
 	}
 	if n := stall.reads.Load() - before; n != 0 {
 		t.Fatalf("evaluate must not read the key or the flag from the database, got %d reads", n)
+	}
+	// The touch did run, off the request, and is still blocked in the stall.
+	deadline := time.Now().Add(5 * time.Second)
+	for stall.touches.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if stall.touches.Load() != 1 {
+		t.Fatalf("want the blocked last_used_at touch to have started once, got %d", stall.touches.Load())
 	}
 }
 
