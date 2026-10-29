@@ -19,6 +19,10 @@ const deadLetterFileName = "deadletter.ndjson"
 
 var ErrFull = errors.New("spool is full")
 
+// ErrClosed is returned by writes after Close. A closed spool is never
+// reopened: a record must not be reported written to a file shut down below it.
+var ErrClosed = errors.New("spool is closed")
+
 // Record is a single durably-queued ingest payload.
 type Record struct {
 	IngestID      string    `json:"ingestId"`
@@ -112,6 +116,17 @@ func ActiveSize(dir string) (int64, error) {
 	return fi.Size(), nil
 }
 
+// open (re)opens the active spool file. Callers hold s.mu.
+func (s *Spool) open() error {
+	file, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		s.file = nil
+		return err
+	}
+	s.file = file
+	return nil
+}
+
 // Append writes a single record to the spool.
 func (s *Spool) Append(record Record) error {
 	if s == nil {
@@ -129,6 +144,17 @@ func (s *Spool) Append(record Record) error {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if s.closed {
+		return ErrClosed
+	}
+	if s.file == nil {
+		// A failed rotation may have left no file. Retry the open so a later
+		// append recovers instead of failing on a nil handle forever.
+		if err := s.open(); err != nil {
+			return fmt.Errorf("spool append open: %w", err)
+		}
+	}
 
 	if s.maxBytes > 0 {
 		info, err := s.file.Stat()
@@ -173,6 +199,15 @@ func (s *Spool) AppendBatch(records []Record) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if s.closed {
+		return ErrClosed
+	}
+	if s.file == nil {
+		if err := s.open(); err != nil {
+			return fmt.Errorf("spool append batch open: %w", err)
+		}
+	}
+
 	if s.maxBytes > 0 {
 		info, err := s.file.Stat()
 		if err != nil {
@@ -191,7 +226,7 @@ func (s *Spool) AppendBatch(records []Record) error {
 
 // Close flushes and closes the spool file. Closing twice is not an error.
 func (s *Spool) Close() error {
-	if s == nil || s.file == nil {
+	if s == nil {
 		return nil
 	}
 
@@ -202,11 +237,19 @@ func (s *Spool) Close() error {
 		return nil
 	}
 	s.closed = true
+	if s.file == nil {
+		return nil
+	}
 	return s.file.Close()
 }
 
 // Rotate renames the current active segment to ingest-TIMESTAMP.ndjson and
 // opens a fresh ingest.ndjson. The cursor is reset to 0 on rotation.
+//
+// Every failure path leaves the spool with an open active file whenever the
+// filesystem allows reopening it, so ingest keeps accepting records. If the
+// reopen fails too, the spool keeps no file and the next Append, AppendBatch or
+// RotateIfExceeds retries the open.
 func (s *Spool) Rotate() error {
 	if s == nil {
 		return errors.New("spool is nil")
@@ -220,21 +263,34 @@ func (s *Spool) Rotate() error {
 	if s.closed {
 		return nil
 	}
+	if s.file == nil {
+		if err := s.open(); err != nil {
+			return fmt.Errorf("spool rotate open: %w", err)
+		}
+	}
 	if err := s.file.Close(); err != nil {
+		s.file = nil
+		if reopenErr := s.open(); reopenErr != nil {
+			return fmt.Errorf("spool rotate close: %w (reopen: %v)", err, reopenErr)
+		}
 		return fmt.Errorf("spool rotate close: %w", err)
 	}
+	s.file = nil
 
 	ts := time.Now().UTC().Format("20060102T150405Z")
 	archived := filepath.Join(s.dir, fmt.Sprintf("ingest-%s.ndjson", ts))
 	if err := os.Rename(s.path, archived); err != nil {
+		// The segment was not archived: keep writing to the unrenamed file
+		// instead of failing every later append with "file already closed".
+		if reopenErr := s.open(); reopenErr != nil {
+			return fmt.Errorf("spool rotate rename: %w (reopen: %v)", err, reopenErr)
+		}
 		return fmt.Errorf("spool rotate rename: %w", err)
 	}
 
-	file, err := os.OpenFile(s.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
+	if err := s.open(); err != nil {
 		return fmt.Errorf("spool rotate open: %w", err)
 	}
-	s.file = file
 	return nil
 }
 
@@ -248,6 +304,12 @@ func (s *Spool) RotateIfExceeds(maxBytes int64) error {
 	if s.closed {
 		s.mu.Unlock()
 		return nil
+	}
+	if s.file == nil {
+		if err := s.open(); err != nil {
+			s.mu.Unlock()
+			return fmt.Errorf("spool rotate-if-exceeds open: %w", err)
+		}
 	}
 	info, err := s.file.Stat()
 	s.mu.Unlock()

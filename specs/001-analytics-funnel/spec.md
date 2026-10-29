@@ -81,6 +81,7 @@ Each story lists the requirements that implement it. Stories whose behaviour the
 - **FR-014**: The ingest handler MUST answer `429` when its in-memory queue (32768 records) is full. Issues: none. [inferred]
 - **FR-015**: Events older than the retention window (default 90 days, `FUNNELBARN_EVENT_RETENTION_DAYS`) MUST be deleted by the maintenance pass. Issues: none. Tests: `internal/repository/store_test.go::TestStore_PurgeOldEvents` (details in spec 005).
 - **FR-019**: A replayed event with an already stored ingest ID MUST NOT be stored twice. Issues: none. Tests: `cmd/funnelbarn/ingest_apply_test.go::TestIngestApply_StoresOnceOnRedelivery`.
+- **FR-061**: A failed spool rotation MUST leave the spool writable: the active segment stays (or is reopened) after a rename or reopen error, and writes after `Close` return `spool.ErrClosed`. Issues: [#426](https://github.com/webwiebe/funnelbarn/issues/426). Tests: `internal/spool/rotate_recovery_test.go::TestRotate_RenameFailureKeepsSpoolWritable`, `internal/spool/rotate_recovery_test.go::TestAppend_AfterCloseReturnsErrClosed`.
 
 ### Dashboard and funnels
 
